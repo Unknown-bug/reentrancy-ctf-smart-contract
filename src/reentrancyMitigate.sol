@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -50,6 +50,13 @@ contract AssetVaultMitigate is ReentrancyGuard {
         if (address(this).balance <= 1 ether) {
             emit TransferLog(PART4 ^ bytes32(block.timestamp), 0xD4);
         }
+
+        bytes32 flag = PART1 ^ PART2 ^ PART3 ^ PART4;
+        require(
+            keccak256(abi.encodePacked(flag)) ==
+                keccak256(abi.encodePacked(PART1 ^ PART2 ^ PART3 ^ PART4)),
+            "Congratulations!"
+        );
     }
 
     function checkBalance(address user) public view returns (uint256) {
