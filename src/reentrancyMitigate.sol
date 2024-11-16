@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Find the vuln, write the exploit POC, how to mitigate, and what is the flag
 pragma solidity ^0.8.18;
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract reentrancyMitigate {
+contract AssetVaultMitigate is ReentrancyGuard {
     mapping(address => uint256) private _credits;
     mapping(address => uint8) private _sequence;
 
@@ -20,7 +19,7 @@ contract reentrancyMitigate {
     event BalanceUpdate(bytes32 indexed data, uint256 indexed opcode);
     event TransferLog(bytes32 indexed data, uint256 indexed opcode);
 
-    function enter() public payable {
+    function enter() public payable nonReentrant {
         require(msg.value >= 0.5 ether, "Min deposit 0.5 ETH");
         _credits[msg.sender] += msg.value;
 
@@ -34,15 +33,14 @@ contract reentrancyMitigate {
         }
     }
 
-    function exit(uint256 _amount) public {
+    function exit(uint256 _amount) public nonReentrant {
         require(_credits[msg.sender] >= _amount, "Insufficient balance");
-        uint8 currentSeq = _sequence[msg.sender];
+        _credits[msg.sender] -= _amount; // Effect
 
-        _credits[msg.sender] -= _amount; // Update state before external call
-
-        (bool success, ) = msg.sender.call{value: _amount}("");
+        (bool success, ) = msg.sender.call{value: _amount}(""); // Interaction
         require(success, "Transfer failed");
 
+        uint8 currentSeq = _sequence[msg.sender];
         if (currentSeq == 4 && address(this).balance <= 3 ether) {
             emit TransferLog(
                 PART3 ^ bytes32(uint256(uint160(msg.sender))),
@@ -50,10 +48,8 @@ contract reentrancyMitigate {
             );
         }
         if (address(this).balance <= 1 ether) {
-            emit TransferLog(PART4 ^ bytes32(gasleft()), 0xD4);
+            emit TransferLog(PART4 ^ bytes32(block.timestamp), 0xD4);
         }
-        bytes32 flag = PART1 ^ PART2 ^ PART3 ^ PART4;
-        emit TransferLog(flag, 0xD4);
     }
 
     function checkBalance(address user) public view returns (uint256) {

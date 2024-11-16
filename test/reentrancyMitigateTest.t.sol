@@ -3,114 +3,86 @@ pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
 import "../src/reentrancyMitigate.sol";
-import "../src/reentrancyExploitMitigate.sol";
+import "../src/reentrancyExploit.sol";
 
-contract AssetVaultTest is Test {
-    reentrancyMitigate assetVault;
-    reentrancyExploitMitigate exploit;
-    address attacker = address(0xBEEF); // Designated attacker address
-
-    // Fund amount
-    uint256 depositAmount = 1 ether;
+contract ReentrancyMitigateTest is Test {
+    AssetVaultMitigate public target;
+    reentrancyExploit public exploit;
+    address public attacker = address(0x1);
 
     function setUp() public {
-        // Deploy the AssetVault contract
-        assetVault = new reentrancyMitigate();
-
-        // Deploy the ReentrancyExploit contract with the AssetVault's address
-        exploit = new reentrancyExploitMitigate(address(assetVault));
-
-        // Label addresses for better readability in test logs
-        vm.label(address(assetVault), "AssetVault");
-        vm.label(address(exploit), "ReentrancyExploit");
-        vm.label(attacker, "Attacker");
+        target = new AssetVaultMitigate();
+        exploit = new reentrancyExploit(address(target));
+        vm.deal(attacker, 5 ether);
     }
 
-    function test_Reentrancy_Mitigated() public {
-        // Step 1: Attacker deposits 0.5 ETH into AssetVault
-        vm.deal(attacker, depositAmount);
+    function testReentrancyAttack() public {
+        vm.deal(address(target), 1 ether);
+
         vm.startPrank(attacker);
-        exploit.attack{value: 0.5 ether}();
+        exploit.attack{value: 1 ether}();
+        vm.stopPrank();
 
-        // Exploit contract should have received 0.5 ETH
-        uint256 initialExploitBalance = address(exploit).balance;
-        uint256 vaultBalance = assetVault.checkBalance(attacker);
+        uint256 targetBalance = address(target).balance;
+        uint256 exploitBalance = address(exploit).balance;
 
-        // Assert initial conditions
+        console.log("targetBalance: ", targetBalance);
+        console.log("exploitBalance: ", exploitBalance);
+
+        // Verify that the reentrancy attack failed
+        assertEq(targetBalance, 1 ether, "Target balance should remain intact");
         assertEq(
-            initialExploitBalance,
-            0.5 ether,
-            "Exploit contract should have 0.5 ETH after attack"
+            exploitBalance,
+            0 ether,
+            "Exploit contract should not have gained ETH"
         );
-        assertEq(
-            vaultBalance,
-            0.0 ether,
-            "AssetVault should have 0 ETH for attacker after withdrawal"
-        );
+    }
 
-        // Step 2: Attempt reentrancy by calling attack again
-        (bool success, ) = address(exploit).call{value: 0}(
-            abi.encodeWithSignature("attack()")
-        );
+    function testMultipleExits() public {
+        vm.startPrank(attacker);
+        target.enter{value: 2 ether}();
+        target.exit(1 ether);
+        target.exit(1 ether);
+        vm.stopPrank();
 
-        // Assert that reentrancy did not occur
-        assertEq(
-            address(exploit).balance,
-            0.5 ether,
-            "Exploit contract balance should remain 0.5 ETH"
-        );
-        assertEq(
-            vaultBalance,
-            0.0 ether,
-            "AssetVault balance for attacker should remain 0 ETH"
-        );
+        uint256 targetBalance = address(target).balance;
+        uint256 attackerBalance = target.checkBalance(attacker);
 
-        // Additionally, check that the total balance of AssetVault has not been drained
-        uint256 totalVaultBalance = address(assetVault).balance;
-        assertEq(
-            totalVaultBalance,
-            0.0 ether,
-            "AssetVault total balance should be 0 ETH"
-        );
+        assertEq(targetBalance, 0 ether, "Target balance should be zero");
+        assertEq(attackerBalance, 0 ether, "Attacker balance should be zero");
+    }
 
+    function testEnterAndExit() public {
+        vm.startPrank(attacker);
+        target.enter{value: 1 ether}();
+        uint256 balance = target.checkBalance(attacker);
+        assertEq(balance, 1 ether, "Balance should be 1 ether");
+
+        target.exit(1 ether);
+        balance = target.checkBalance(attacker);
+        assertEq(balance, 0 ether, "Balance should be zero");
         vm.stopPrank();
     }
 
-    function test_Reentrancy_AttemptFails() public {
-        // Step 1: Attacker deposits 1 ETH into AssetVault
-        vm.deal(attacker, depositAmount);
+    function testInsufficientBalanceExit() public {
+        vm.startPrank(attacker);
+        target.enter{value: 0.5 ether}();
+        vm.expectRevert("Insufficient balance");
+        target.exit(1 ether);
+        vm.stopPrank();
+    }
+
+    function testReentrancyGuard() public {
         vm.startPrank(attacker);
         exploit.attack{value: 1 ether}();
 
-        // Attempt to exploit again by calling attack
-        (bool success, ) = address(exploit).call{value: 0}(
-            abi.encodeWithSignature("attack()")
-        );
+        // Attempt to re-enter during exit
+        vm.expectRevert("ReentrancyGuard: reentrant call");
+        exploit.attack{value: 1 ether}();
 
-        // Assert that the second attack does not increase the exploit's balance
-        uint256 exploitBalance = address(exploit).balance;
-        uint256 vaultBalance = assetVault.checkBalance(attacker);
-
-        // Expected: Only the first attack succeeds
-        assertEq(
-            exploitBalance,
-            1 ether,
-            "Exploit contract should have only 1 ETH after two attack attempts"
-        );
-        assertEq(
-            vaultBalance,
-            0 ether,
-            "AssetVault should have 0 ETH for attacker after withdrawal"
-        );
-
-        // Check that AssetVault's balance is zero
-        uint256 totalVaultBalance = address(assetVault).balance;
-        assertEq(
-            totalVaultBalance,
-            0 ether,
-            "AssetVault total balance should be 0 ETH"
-        );
-
+        // Additional attempt to re-enter
+        vm.expectRevert("ReentrancyGuard: reentrant call");
+        exploit.attack{value: 1 ether}();
         vm.stopPrank();
     }
 }
